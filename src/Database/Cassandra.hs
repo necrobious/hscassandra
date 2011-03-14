@@ -108,7 +108,7 @@ multiget column_family keys filters = do
   consistency <- getConsistencyLevel
   conn        <- getConnection
   results     <- liftIO $ Cas.multiget_slice conn (Map.keys byBs) (column_parent column_family) (slice_predicate filters) consistency 
-  return $ map2map byBs $ Map.foldrWithKey remap Map.empty results -- $ foldr rewrap [] results
+  return $ map2map byBs $ Map.foldrWithKey remap Map.empty results 
 
 
 keys2map :: (BS key) => [key] -> Map ByteString key
