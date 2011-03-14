@@ -1,0 +1,23 @@
+#### Connecting
+Connecting to cassandra is done with the withCassandra function, which takes a CassandraConfig instance, and a callback function.
+
+    withCassandra initConfig{cassandraKeyspace="MyApplication"} (do
+        getTime
+        )
+
+
+#### Inserting 
+Inserts are done via the _insert_ function, taking A Column Family string name, a Key, and a a list of columns to add.
+
+    insert "Users" "kirk@glyphsoftware.com" 
+        [ "fn" =: "Kirk"
+        , "ln" =: "Peterson"
+        , "address" =| ["street" =: "2020 NE Going", "city"=:"Portland", "state" =: "OR"]
+        , "gender" =: "M"
+        ]
+
+#### Retrieving
+you can then pull the data back out via the _get_ function.
+
+    get "Users" "kirk@glyphsoftware.com" AllColumns
+
