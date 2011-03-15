@@ -3,6 +3,7 @@ module Database.Cassandra
   , (=:)
   , (=|)
   , insert
+  , remove
   , Filter(..)
   , get
   , multiget
@@ -43,11 +44,11 @@ data Column = Column ColumnName ColumnValue
             | Super  ColumnName [Column] 
             deriving (Show)
 
--- | Build up a column's insert values
+-- Build up a column's insert values
 (=:) :: (BS column, BS value) => column -> value -> Column
 (=:) col val = Column (bs col) (bs val)
 
--- | Build up a super column's insert values
+-- Build up a super column's insert values
 (=|) :: (BS supercolumn) => supercolumn -> [Column] -> Column 
 (=|) sup  = Super (bs sup)
 
@@ -73,7 +74,23 @@ insert column_family key columns = do
 
 -- remove "Users" "necrobious@gmail.com" [col "fn", "address" =| [col "state", col "city"], col "ln"]   
 remove :: (BS key) => ColumnFamily -> key -> [Column]  -> Cassandra ()
-remove column_family key columns = undefined
+remove column_family key columns = do 
+  consistency <- getConsistencyLevel
+  conn <- getConnection
+  now <- getTime
+  if length columns < 1 -- no columns? remove the whole row from the column family
+    then liftIO $ Cas.remove conn (bs key) (Thrift.ColumnPath (Just column_family) Nothing Nothing) now consistency 
+    else liftIO $ Cas.batch_mutate conn (Map.singleton (bs key) (Map.singleton column_family (mutations now))) consistency
+  where
+  mutations now = map (q now) columns
+  q now c = Thrift.Mutation Nothing (Just $ f now c) 
+  f now (Super sc cs) 
+    | length cs < 1 = Thrift.Deletion (Just now) (Just sc) Nothing
+    | otherwise = Thrift.Deletion (Just now) (Just sc) (Just $ s (map x cs) )
+  f now (Column c _ ) = Thrift.Deletion (Just now) Nothing   (Just $ s [c]) 
+  s cs = Thrift.SlicePredicate (Just cs) Nothing
+  x (Column c _) = c
+
 
 data Filter  = AllColumns
 	     | ColNames [ByteString]
