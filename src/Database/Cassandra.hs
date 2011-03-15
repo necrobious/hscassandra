@@ -71,6 +71,10 @@ insert column_family key columns = do
   col c v now = Thrift.Column (Just c) (Just v) (Just now) Nothing
   m now (Column c v) = col c v now
 
+-- remove "Users" "necrobious@gmail.com" [col "fn", "address" =| [col "state", col "city"], col "ln"]   
+remove :: (BS key) => ColumnFamily -> key -> [Column]  -> Cassandra ()
+remove column_family key columns = undefined
+
 data Filter  = AllColumns
 	     | ColNames [ByteString]
 	     | ColRange
@@ -86,6 +90,7 @@ range start finish = ColRange (bs start) (bs finish)
 -- | a smarter constructor for building a Columns filter 
 columns :: (BS column_name) => [column_name] -> Filter
 columns = ColNames . (map bs) 
+
 
 -- | for the given key, within the column family, retrieve all columns, unless filtered
 get :: (BS key) => ColumnFamily -> key -> Filter -> Cassandra [Column]
