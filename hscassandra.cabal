@@ -1,5 +1,5 @@
 name               : hscassandra 
-version            : 0.0.6
+version            : 0.0.7
 license            : BSD3 
 cabal-version      : >= 1.6
 author             : Kirk Peterson 
