@@ -59,7 +59,7 @@ data Column = Column ColumnName ColumnValue
 --   , "ln"      =: "Peterson"
 --   , "Address" =| [ "street1" =: "2020"
 --                  , "state"   =: "Oregon"]
---   ]  
+--   ]
 insert :: (BS key) => ColumnFamily -> key -> [Column] -> Cassandra ()
 insert column_family key columns = do 
   consistency <- getConsistencyLevel
@@ -69,12 +69,12 @@ insert column_family key columns = do
   where
   mutations now = map (q now) columns
   q now c = Thrift.Mutation (Just $ f now c) Nothing
-  f now (Super s cs) = Thrift.ColumnOrSuperColumn Nothing (Just (Thrift.SuperColumn (Just s) (Just $ map (m now) cs))) 
-  f now (Column c v) = Thrift.ColumnOrSuperColumn (Just (col c v now)) Nothing
+  f now (Super s cs) = Thrift.ColumnOrSuperColumn Nothing (Just (Thrift.SuperColumn (Just s) (Just $ map (m now) cs))) Nothing Nothing
+  f now (Column c v) = Thrift.ColumnOrSuperColumn (Just (col c v now)) Nothing Nothing Nothing
   col c v now = Thrift.Column (Just c) (Just v) (Just now) Nothing
   m now (Column c v) = col c v now
 
--- remove "Users" "necrobious@gmail.com" (columns ["fn", "address" , "ln"])   
+-- remove "Users" "necrobious@gmail.com" (columns ["fn", "address" , "ln"])
 remove :: (BS key) => ColumnFamily -> key -> Filter  -> Cassandra ()
 remove column_family key fltr = do 
   consistency <- getConsistencyLevel
@@ -156,9 +156,9 @@ remap :: (BS key) => key -> [Thrift.ColumnOrSuperColumn] -> Map key [Column] -> 
 remap key cols acc = Map.insert key (foldr rewrap [] cols) acc 
 
 rewrap :: Thrift.ColumnOrSuperColumn -> [Column] -> [Column]
-rewrap (Thrift.ColumnOrSuperColumn (Just (Thrift.Column (Just n) (Just v) _ _)) Nothing) acc = 
+rewrap (Thrift.ColumnOrSuperColumn (Just (Thrift.Column (Just n) (Just v) _ _)) Nothing Nothing Nothing) acc = 
   (Column n v) : acc
-rewrap (Thrift.ColumnOrSuperColumn Nothing (Just (Thrift.SuperColumn (Just n) (Just cs)))) acc =
+rewrap (Thrift.ColumnOrSuperColumn Nothing (Just (Thrift.SuperColumn (Just n) (Just cs))) Nothing Nothing) acc =
   (Super n (foldr c2c [] cs)) : acc 
 rewrap _ acc = acc
 
