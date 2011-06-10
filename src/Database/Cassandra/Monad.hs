@@ -13,11 +13,13 @@ module Database.Cassandra.Monad
   , Cassandra
   , CassandraT
   , ConsistencyLevel(..)
+  , ProtoHandle
   ) where
 
 import Control.Exception        ( bracket )
 import Control.Monad.State      ( StateT, get, liftIO, liftM, put, runStateT )
 import Data.Int                 ( Int64 )
+import Data.List                ( intercalate )
 import Data.Map                 ( Map )
 import Network                  ( PortID(PortNumber) )
 import System.IO                ( hClose, Handle )
@@ -40,40 +42,53 @@ import qualified Data.Map as M
 type Cassandra  a = CassandraT a
 -- | A monad encapsulating Cassandra state.
 type CassandraT a = StateT CassandraConfig IO a
+-- | A binary protocol where the handle is wraped in a framed mode.
+type ProtoHandle = BinaryProtocol (FramedTransport Handle)
 
 runCassandraT = runStateT
 
 -- | Configuration for the Cassandra environment. Operations will be executed
 --   accordingly based on these values.
 data CassandraConfig = CassandraConfig
-    { cassandraConnection       :: (BinaryProtocol (FramedTransport Handle), BinaryProtocol (FramedTransport Handle)) 
-    , cassandraKeyspace         :: String
-    , cassandraConsistencyLevel :: ConsistencyLevel
-    , cassandraHostname         :: Hostname
-    , cassandraPort             :: Port
-    , cassandraUsername         :: Username
-    , cassandraPassword         :: Password
+    { cassandraConnection       ::  (ProtoHandle, ProtoHandle)
+    , cassandraKeyspace         ::  String
+    , cassandraConsistencyLevel ::  ConsistencyLevel
+    , cassandraHostname         ::  Hostname
+    , cassandraPort             ::  Port
+    , cassandraUsername         ::  Username
+    , cassandraPassword         ::  Password
     }
 
 instance Show CassandraConfig where
-    show c = "KS: "++ (cassandraKeyspace c) ++ ", CL: " ++ (show $ cassandraConsistencyLevel c) ++ ", host: " ++ (cassandraHostname c) ++ ", port: " ++ (show $ cassandraPort c) ++ ", user: " ++ (cassandraUsername c) ++ ", pass: " ++ (cassandraPassword c) 
+    show c = intercalate ", "
+        [ "KS:"     ++ cassandraKeyspace c
+        , "CL:"     ++ (show $ cassandraConsistencyLevel c)
+        , "host:"   ++ cassandraHostname c
+        , "port:"   ++ (show $ cassandraPort c)
+        , "user:"   ++ cassandraUsername c
+        , "pass:"   ++ cassandraPassword c
+        ]
 
 withCassandra :: CassandraConfig -> Cassandra a -> IO a
 withCassandra config callback = bracket
-    (hOpen (cassandraHostname config, PortNumber $ fromIntegral $ cassandraPort config))
-    (\ h -> tFlush h >> tClose h)
-    (\ handle -> do 
+    (hOpen (host, port))
+    flushHandle $
+    \handle -> do
        framed <- openFramedTransport handle
-       let binpro = BinaryProtocol framed 
+       let binpro = BinaryProtocol framed
        let conn   = (binpro, binpro)
+       let cfg    = cfg { cassandraConnection = conn }
        login        conn (authreq config)
        set_keyspace conn (cassandraKeyspace config)
-       liftM fst $ runCassandraT callback (config{cassandraConnection=conn})
-       )
-  where
-  authreq CassandraConfig{cassandraUsername=u, cassandraPassword=p} = 
-    AuthenticationRequest{f_AuthenticationRequest_credentials=Just $ credmap u p}
-  credmap username password = M.insert "password" password (M.insert "username" username M.empty)
+       fst `liftM` runCassandraT callback cfg
+    where
+        host          = cassandraHostname config
+        port          = PortNumber . fromIntegral . cassandraPort $ config
+        flushHandle h = tFlush h >> tClose h
+        credmap u p   = M.insert "password" p . M.insert "username" u $ M.empty
+        creds cfg     = credmap (cassandraUsername cfg) (cassandraPassword cfg)
+        authreq cfg   = AuthenticationRequest
+            { f_AuthenticationRequest_credentials = Just . creds $ cfg }
 
 -- | Default configuration for the Cassandra environment. Values can be changed
 --   as necessary.
@@ -89,7 +104,7 @@ initConfig = CassandraConfig
   }
 
 -- | Get the current Cassandra connection.
-getConnection :: Cassandra (BinaryProtocol (FramedTransport Handle), BinaryProtocol (FramedTransport Handle))
+getConnection :: Cassandra (ProtoHandle, ProtoHandle)
 getConnection  = cassandraConnection `fmap` get -- CassandraT ask
 
 -- | Get the 'ConsistencyLevel' being used in Cassandra operations.
@@ -98,8 +113,8 @@ getConsistencyLevel = cassandraConsistencyLevel `fmap` get
 
 -- | Set the 'ConsistencyLevel' for Cassandra operations.
 setConsistencyLevel :: ConsistencyLevel -> Cassandra ()
-setConsistencyLevel consistency = 
-  getCassandra >>= \ config -> put config{cassandraConsistencyLevel=consistency} 
+setConsistencyLevel consistency =  getCassandra >>=
+    \config -> put config { cassandraConsistencyLevel = consistency }
 
 -- | Get the keyspace in which Cassandra operations are being executed.
 getKeyspace :: Cassandra Keyspace
@@ -118,7 +133,7 @@ setKeyspace keyspace = do
 getTime :: Cassandra Int64
 getTime = do
   TOD sec pico <- liftIO getClockTime
-  return $ fromInteger $ (sec * 1000000) + (toInteger $ pico `div` 1000000)
+  return . fromInteger $ (sec * 1000000) + (toInteger $ pico `div` 1000000)
 
 getCassandra :: Cassandra CassandraConfig
 getCassandra = get
