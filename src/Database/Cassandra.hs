@@ -26,21 +26,24 @@ module Database.Cassandra
   , CassandraT
   ) where
 
-import qualified Database.Cassandra.Thrift.Cassandra_Types as Thrift
-import qualified Database.Cassandra.Thrift.Cassandra_Client as Cas
+import Control.Monad.Trans      ( liftIO )
+import Data.ByteString.Lazy     ( ByteString )
+import Data.Int                 ( Int32 )
+import Data.Map                 ( Map )
+import Database.Cassandra.Monad ( Cassandra, CassandraConfig, CassandraT
+                                , getKeyspace, getCassandra, getConnection
+                                , getConsistencyLevel, getTime, initConfig
+                                , setKeyspace, setConsistencyLevel
+                                , withCassandra
+                                )
+import Database.Cassandra.Types ( BS, bs, ColumnFamily, ColumnName
+                                , ColumnValue
+                                )
 
-import Database.Cassandra.Monad
-import Database.Cassandra.Types
-
-import Data.Map (Map)
-import qualified Data.Map as Map
-
-import Data.ByteString.Lazy(ByteString)
 import qualified Data.ByteString.Lazy.Char8 as Lazy
-
-import Control.Monad.Trans
-import Data.Int(Int32)
-
+import qualified Database.Cassandra.Thrift.Cassandra_Types  as Thrift
+import qualified Database.Cassandra.Thrift.Cassandra_Client as Cas
+import qualified Data.Map as Map
 
 data Column = Column ColumnName ColumnValue
             | Super  ColumnName [Column] 
