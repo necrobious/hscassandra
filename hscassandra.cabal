@@ -1,13 +1,13 @@
-name               : hscassandra 
-version            : 0.0.7
-license            : BSD3 
+name               : hscassandra
+version            : 0.0.8
+license            : BSD3
 cabal-version      : >= 1.6
-author             : Kirk Peterson 
+author             : Kirk Peterson
 maintainer         : kirk@glyphsoftware.com,
                      necrobious@gmail.com
 homepage           : https://github.com/necrobious/hscassandra
 stability          : alpha
-synopsis           : cassandra database interface 
+synopsis           : cassandra database interface
 description        : A simple abstration over the Cassandra Thrift
                      bindings designed to make working with Cassandra's
                      thrift API easier, without removing the ability to
@@ -30,10 +30,10 @@ library
                      , Database.Cassandra.Monad
                      , Database.Cassandra.Types
     build-depends    : base             >= 4.2.0.0 && < 4.9
-                     , containers
-                     , old-time
+                     , containers        < 0.5.*
+                     , old-time         == 1.0.0.*
                      , mtl              >= 2.0
-                     , bytestring
-                     , network
+                     , bytestring       == 0.9.1.*
+                     , network          >= 2.2.* && < 2.4
                      , Thrift           >= 0.5.0.2
                      , cassandra-thrift >= 0.7.2.1
