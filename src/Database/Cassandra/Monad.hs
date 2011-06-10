@@ -77,9 +77,9 @@ withCassandra config callback = bracket
        framed <- openFramedTransport handle
        let binpro = BinaryProtocol framed
        let conn   = (binpro, binpro)
-       let cfg    = cfg { cassandraConnection = conn }
        login        conn (authreq config)
        set_keyspace conn (cassandraKeyspace config)
+       let cfg    = config { cassandraConnection = conn }
        fst `liftM` runCassandraT callback cfg
     where
         host          = cassandraHostname config
