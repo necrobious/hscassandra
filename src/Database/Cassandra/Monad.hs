@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable, GeneralizedNewtypeDeriving #-}
+
 module Database.Cassandra.Monad
   ( withCassandra
   , CassandraConfig(..)
