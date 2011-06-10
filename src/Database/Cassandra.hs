@@ -7,9 +7,6 @@ module Database.Cassandra
     , (=|)
     , insert
     , remove
-    , columns
-    , supercolumns
-    , range
     , get
     , get_count
     , multiget
@@ -40,8 +37,8 @@ import Database.Cassandra.Monad ( Cassandra, CassandraConfig, CassandraT
                                 , setKeyspace, setConsistencyLevel
                                 , withCassandra
                                 )
-import Database.Cassandra.Types ( BS, bs, ColumnFamily, ColumnName
-                                , ColumnValue
+import Database.Cassandra.Types ( ColumnFamily, ColumnName
+                                , ColumnValue, Key, SuperColumnName
                                 )
 
 import qualified Data.ByteString.Lazy.Char8 as L
@@ -73,12 +70,12 @@ data Filter =
                 }
 
 -- | Build up a column's insert values
-(=:) :: (BS column, BS value) => column -> value -> Column
-(=:) col val = Column (bs col) (bs val)
+(=:) :: ColumnName -> ColumnValue -> Column
+(=:) col val = Column col val
 
 -- | Build up a super column's insert values
-(=|) :: (BS supercolumn) => supercolumn -> [Column] -> Column
-(=|) sup  = Super (bs sup)
+(=|) :: SuperColumnName -> [Column] -> Column
+(=|) sup = Super sup
 
 -- | Given a particular column family and key, inserts columns consisting of
 --   name-value pairs. E.g.,
@@ -90,12 +87,12 @@ data Filter =
 -- >                  , "state"   =: "Oregon"
 -- >                  ]
 -- >   ]
-insert :: (BS key) => ColumnFamily -> key -> [Column] -> Cassandra ()
+insert :: ColumnFamily -> Key -> [Column] -> Cassandra ()
 insert column_family key cols = do
     consistency   <- getConsistencyLevel
     conn          <- getConnection
     now           <- getTime
-    let mtMap = M.singleton (bs key) $ M.singleton column_family (mutations now)
+    let mtMap = M.singleton key $ M.singleton column_family (mutations now)
     liftIO $ C.batch_mutate conn mtMap consistency
     where
         mutations now       = map (q now) cols
@@ -114,7 +111,7 @@ insert column_family key cols = do
 --   column) based on the filter. E.g.,
 --
 -- > remove "Users" "necrobious@gmail.com" (columns ["fn", "address" , "ln"])
-remove :: (BS key) => ColumnFamily -> key -> Filter  -> Cassandra ()
+remove :: ColumnFamily -> Key -> Filter  -> Cassandra ()
 remove column_family key fltr = do
     consistency <- getConsistencyLevel
     conn        <- getConnection
@@ -122,15 +119,14 @@ remove column_family key fltr = do
     let mts s c = mtMap $ mutations now s c
     let bMutate = C.batch_mutate conn
     case fltr of
-        AllColumns     -> liftIO $ C.remove conn key' colPath now consistency
-        ColNames []    -> liftIO $ C.remove conn key' colPath now consistency
+        AllColumns     -> liftIO $ C.remove conn key colPath now consistency
+        ColNames []    -> liftIO $ C.remove conn key colPath now consistency
         ColNames cs    -> liftIO $ bMutate (mts Nothing cs) consistency
         SupNames sc cs -> liftIO $ bMutate (mts (Just sc) cs) consistency
         _              -> return ()
     where
-        key'    = bs key
         colPath = T.ColumnPath (Just column_family) Nothing Nothing
-        mtMap   = M.singleton (bs key) . M.singleton column_family
+        mtMap   = M.singleton key . M.singleton column_family
         mutations now sup cs = [m now sup cs]
         m now sup cs = T.Mutation Nothing (Just $ delete now sup cs)
 
@@ -147,35 +143,20 @@ deletion :: Int64 -> Maybe ByteString -> Maybe T.SlicePredicate -> T.Deletion
 deletion  = T.Deletion . Just
 
 -- Creates a SlicePredicate based on an input list of columns.
-slicePredicate :: [ByteString] -> T.SlicePredicate
+slicePredicate :: [ColumnName] -> T.SlicePredicate
 slicePredicate cs = T.SlicePredicate (Just cs) Nothing
-
--- | A constructor to build a Columns filter.
-columns :: forall column_name. (BS column_name) => [column_name] -> Filter
-columns = ColNames . (map bs)
-
--- | A constructor to build a Super Columns filter.
-supercolumns :: forall column_name. (BS column_name) => column_name
-             -> [column_name] -> Filter
-supercolumns sc cs = SupNames (bs sc) (map bs cs)
-
--- | A constructor to build a filter for a range.
-range :: forall column_name. (BS column_name) => column_name -> column_name
-      -> Bool -> Int32 -> Filter
-range start finish = ColRange (bs start) (bs finish)
 
 -- | Retrieve all columns (or those allowed by the filter) for a given key
 --   within a given Column Family.
 --
 --   See <http://wiki.apache.org/cassandra/API#get> for more info.
-get :: (BS key) => ColumnFamily -> key -> Filter -> Cassandra [Column]
+get :: ColumnFamily -> Key -> Filter -> Cassandra [Column]
 get cf key fltr = do
     consistency <- getConsistencyLevel
     conn    <- getConnection
-    results <- liftIO $ C.get_slice conn key' cp sp consistency
+    results <- liftIO $ C.get_slice conn key cp sp consistency
     return   $ foldr rewrap [] results
-    where key'  = bs key
-          cp    = column_parent cf fltr
+    where cp    = column_parent cf fltr
           sp    = slice_predicate fltr
 
 -- | Counts the elements present in a column, identified by key, within
@@ -186,21 +167,19 @@ get cf key fltr = do
 --   do not have to be pulled to the client for counting.
 --
 --   See <http://wiki.apache.org/cassandra/API#get_count> for more info.
-get_count :: (BS key) => ColumnFamily -> key -> Filter -> Cassandra Int32
+get_count :: ColumnFamily -> Key -> Filter -> Cassandra Int32
 get_count cf key fltr = do
     consistency <- getConsistencyLevel
     conn        <- getConnection
-    liftIO $ C.get_count conn key' cp sp consistency
-    where key'  = bs key
-          cp    = column_parent cf fltr
+    liftIO $ C.get_count conn key cp sp consistency
+    where cp    = column_parent cf fltr
           sp    = slice_predicate fltr
 
 -- | For a specified Column Family, retrieves all columns matching the filter
 --   and identified by one of the supplied keys.
 --
 --   See <http://wiki.apache.org/cassandra/API#multiget_slice> for more info.
-multiget :: (BS key) => ColumnFamily -> [key] -> Filter
-         -> Cassandra (Map key [Column])
+multiget :: ColumnFamily -> [Key] -> Filter -> Cassandra (Map Key [Column])
 multiget cf keys fltr = do
     let byBs     = keys2map keys
     consistency <- getConsistencyLevel
@@ -212,12 +191,12 @@ multiget cf keys fltr = do
           sp = slice_predicate fltr
 
 -- Turns a list of keys into a map.
-keys2map :: (BS key) => [key] -> Map ByteString key
-keys2map keys = foldr (\ k m -> M.insert (bs k) k m) M.empty keys
+keys2map :: [Key] -> Map ByteString Key
+keys2map keys = foldr (\k m -> M.insert k k m) M.empty keys
 
 -- Joins two maps based on their key, producing a new map which uses the value
 -- of the first map as a key and the value of the second map as a value.
-map2map :: (BS key) => Map ByteString key ->  Map ByteString a -> Map key a
+map2map :: Map ByteString Key ->  Map ByteString a -> Map Key a
 map2map lookupMap resultsMap = M.foldrWithKey foldOver M.empty resultsMap
     where foldOver resultKey val accMap =
             case M.lookup resultKey lookupMap of
@@ -226,8 +205,7 @@ map2map lookupMap resultsMap = M.foldrWithKey foldOver M.empty resultsMap
 
 -- | Joins a list of columns or super columns with an existing map of keys and
 --   columns.
-remap :: (BS key) => key -> [T.ColumnOrSuperColumn] -> Map key [Column]
-      -> Map key [Column]
+remap :: Key -> [T.ColumnOrSuperColumn] -> Map Key [Column] -> Map Key [Column]
 remap key cols acc = M.insert key (foldr rewrap [] cols) acc
 
 -- | Joins a list of columns or super columns with an existing list of columns.
@@ -261,8 +239,8 @@ column_parent cf _               = T.ColumnParent (Just cf) Nothing
 slice_predicate :: Filter -> T.SlicePredicate
 slice_predicate (ColNames ns)           = T.SlicePredicate (Just ns) Nothing
 slice_predicate (SupNames _ ns)         = T.SlicePredicate (Just ns) Nothing
-slice_predicate (ColRange rs re rr rl)  = T.SlicePredicate Nothing (Just range')
-    where range' = T.SliceRange (Just rs) (Just re) (Just rr) (Just rl)
-slice_predicate AllColumns              = T.SlicePredicate Nothing (Just range')
-    where range' = T.SliceRange (Just L.empty) (Just L.empty) (Just False)
+slice_predicate (ColRange rs re rr rl)  = T.SlicePredicate Nothing (Just range)
+    where range = T.SliceRange (Just rs) (Just re) (Just rr) (Just rl)
+slice_predicate AllColumns              = T.SlicePredicate Nothing (Just range)
+    where range = T.SliceRange (Just L.empty) (Just L.empty) (Just False)
                                 (Just 100)

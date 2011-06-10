@@ -1,10 +1,6 @@
-{-# LANGUAGE TypeSynonymInstances #-}
-
 module Database.Cassandra.Types where
 
-import Data.ByteString.Lazy         ( ByteString )
-import Data.ByteString.Lazy.Char8   ( pack, fromChunks )
-import qualified Data.ByteString as BS
+import Data.ByteString.Lazy ( ByteString )
 
 type Port             = Int     -- ^ Port on which Cassandra is hosted.
 type Hostname         = String  -- ^ Hostname identifying Cassandra cluster.
@@ -27,17 +23,12 @@ type ColumnName       = ByteString
 --   a column. See also
 --   <http://wiki.apache.org/cassandra/DataModel#Columns>.
 type ColumnValue      = ByteString
-type ThriftApiVersion = String
+-- | Identifies a row within a ColumnFamily. See
+--   <http://wiki.apache.org/cassandra/API#Terminology_.2BAC8_Abbreviations>.
+type Key              = ByteString
 type SchemaId         = String
-
-class (Ord a) => BS a where
-  bs :: a -> ByteString
-
-instance BS String where
-  bs = pack
-
-instance BS ByteString where
-  bs = id
-
-instance BS BS.ByteString where
-  bs bs' = fromChunks [bs']
+-- | The name of a SuperColumn, a structure which stores a level of
+--   Columns below the key. See
+--   <http://wiki.apache.org/cassandra/API#SuperColumn>.
+type SuperColumnName  = ByteString
+type ThriftApiVersion = String
