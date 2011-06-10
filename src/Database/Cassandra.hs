@@ -30,6 +30,7 @@ import Control.Monad.Trans      ( liftIO )
 import Data.ByteString.Lazy     ( ByteString )
 import Data.Int                 ( Int32 )
 import Data.Map                 ( Map )
+import Data.Maybe               ( fromJust )
 import Database.Cassandra.Monad ( Cassandra, CassandraConfig, CassandraT
                                 , getKeyspace, getCassandra, getConnection
                                 , getConsistencyLevel, getTime, initConfig
@@ -193,18 +194,14 @@ remap :: (BS key) => key -> [T.ColumnOrSuperColumn] -> Map key [Column]
 remap key cols acc = M.insert key (foldr rewrap [] cols) acc
 
 rewrap :: T.ColumnOrSuperColumn -> [Column] -> [Column]
-rewrap  (T.ColumnOrSuperColumn
-              (Just (T.Column (Just n) (Just v) _ _))
-              Nothing
-              Nothing
-              Nothing
-        ) acc  = (Column n v) : acc
-rewrap  (T.ColumnOrSuperColumn
-              Nothing
-              (Just (T.SuperColumn (Just n) (Just cs)))
-              Nothing
-              Nothing
-        ) acc = (Super n (foldr c2c [] cs)) : acc
+rewrap (T.ColumnOrSuperColumn (Just col) Nothing Nothing Nothing) acc =
+    let name = fromJust $ T.f_Column_name  col
+        val  = fromJust $ T.f_Column_value col
+    in (Column name val) : acc
+rewrap (T.ColumnOrSuperColumn Nothing (Just sc) Nothing Nothing) acc =
+    let name = fromJust $ T.f_SuperColumn_name sc
+        cols = fromJust $ T.f_SuperColumn_columns sc
+    in (Super name (foldr c2c [] cols)) : acc
 rewrap _ acc  = acc
 
 c2c :: T.Column -> [Column] -> [Column]
