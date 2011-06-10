@@ -97,14 +97,14 @@ remove column_family key fltr = do
 
 
 data Filter  = AllColumns
-	     | ColNames [ByteString]
-	     | SupNames ByteString [ByteString]
-	     | ColRange
-	         { rangeStart   :: ByteString
-	         , rangeEnd     :: ByteString
-	         , rangeReverse :: Bool
-	         , rangeLimit   :: Int32
-	         }
+         | ColNames [ByteString]
+         | SupNames ByteString [ByteString]
+         | ColRange
+             { rangeStart   :: ByteString
+             , rangeEnd     :: ByteString
+             , rangeReverse :: Bool
+             , rangeLimit   :: Int32
+             }
 -- | a smarter constructor for building a Range filter
 range :: forall column_name. (BS column_name) => column_name -> column_name -> Bool -> Int32 -> Filter
 range start finish = ColRange (bs start) (bs finish) 
