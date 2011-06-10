@@ -2,18 +2,19 @@
 
 module Database.Cassandra
     ( Column(..)
+    , Filter(..)
     , (=:)
     , (=|)
     , insert
     , remove
-    , Filter(..)
-    , get
-    , multiget
-    , range
     , columns
     , supercolumns
+    , range
+    , get
     , get_count
+    , multiget
 
+    -- Re-export
     , withCassandra
     , CassandraConfig
     , initConfig
@@ -210,9 +211,12 @@ multiget cf keys fltr = do
     where cp = column_parent cf fltr
           sp = slice_predicate fltr
 
+-- Turns a list of keys into a map.
 keys2map :: (BS key) => [key] -> Map ByteString key
-keys2map keys = foldr (\ k m -> M.insert (bs k) k m)  M.empty keys
+keys2map keys = foldr (\ k m -> M.insert (bs k) k m) M.empty keys
 
+-- Joins two maps based on their key, producing a new map which uses the value
+-- of the first map as a key and the value of the second map as a value.
 map2map :: (BS key) => Map ByteString key ->  Map ByteString a -> Map key a
 map2map lookupMap resultsMap = M.foldrWithKey foldOver M.empty resultsMap
     where foldOver resultKey val accMap =
@@ -238,14 +242,22 @@ rewrap (T.ColumnOrSuperColumn Nothing (Just sc) Nothing Nothing) acc =
     in (Super name (foldr c2c [] cols)) : acc
 rewrap _ acc  = acc
 
+-- Joins a Cassandra-Thrift 'T.Column' with a list of Columns, turning it
+-- into a 'Column' in the process.
 c2c :: T.Column -> [Column] -> [Column]
 c2c (T.Column (Just n) (Just v) _ _) acc = (Column n v) : acc
 c2c _ acc = acc
 
+-- Uses a specified 'ColumnFamily' and 'Filter' to produce a 'T.ColumnParent',
+-- which is understood by Cassandra as the path to a particular set of columns.
+-- See <http://wiki.apache.org/cassandra/API#ColumnParent>.
 column_parent :: ColumnFamily -> Filter -> T.ColumnParent
 column_parent cf (SupNames sc _) = T.ColumnParent (Just cf) (Just sc)
 column_parent cf _               = T.ColumnParent (Just cf) Nothing
 
+-- Turns a 'Filter' into a 'T.SlicePredicate', which is understood by Cassandra
+-- for selecting columns in various operations. See
+-- <http://wiki.apache.org/cassandra/API#SlicePredicate>.
 slice_predicate :: Filter -> T.SlicePredicate
 slice_predicate (ColNames ns)           = T.SlicePredicate (Just ns) Nothing
 slice_predicate (SupNames _ ns)         = T.SlicePredicate (Just ns) Nothing
