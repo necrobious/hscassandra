@@ -20,9 +20,8 @@ import Control.Exception        ( bracket )
 import Control.Monad.State      ( StateT, get, liftIO, liftM, put, runStateT )
 import Data.Int                 ( Int64 )
 import Data.List                ( intercalate )
-import Data.Map                 ( Map )
 import Network                  ( PortID(PortNumber) )
-import System.IO                ( hClose, Handle )
+import System.IO                ( Handle )
 import System.Time              ( ClockTime(TOD), getClockTime )
 import Thrift.Protocol.Binary   ( BinaryProtocol(..) )
 import Thrift.Transport.Handle  ( hOpen )
@@ -45,6 +44,7 @@ type CassandraT a = StateT CassandraConfig IO a
 -- | A binary protocol where the handle is wraped in a framed mode.
 type ProtoHandle = BinaryProtocol (FramedTransport Handle)
 
+runCassandraT :: StateT s m a -> s -> m (a, s)
 runCassandraT = runStateT
 
 -- | Configuration for the Cassandra environment. Operations will be executed

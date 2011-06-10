@@ -11,9 +11,11 @@ module Database.Cassandra
     , multiget
     , range
     , columns
+    , supercolumns
+    , get_count
 
     , withCassandra
-    , CassandraConfig(..)
+    , CassandraConfig
     , initConfig
     , getConnection
     , getKeyspace
@@ -88,14 +90,14 @@ data Filter =
 -- >                  ]
 -- >   ]
 insert :: (BS key) => ColumnFamily -> key -> [Column] -> Cassandra ()
-insert column_family key columns = do
+insert column_family key cols = do
     consistency   <- getConsistencyLevel
     conn          <- getConnection
     now           <- getTime
     let mtMap = M.singleton (bs key) $ M.singleton column_family (mutations now)
     liftIO $ C.batch_mutate conn mtMap consistency
     where
-        mutations now       = map (q now) columns
+        mutations now       = map (q now) cols
         colOrSuperCol c sc  = T.ColumnOrSuperColumn c sc Nothing Nothing
         column c            = colOrSuperCol (Just c) Nothing
         superCol sc         = colOrSuperCol Nothing (Just sc)
@@ -116,18 +118,19 @@ remove column_family key fltr = do
     consistency <- getConsistencyLevel
     conn        <- getConnection
     now         <- getTime
-    let mts = mtMap . mutations now Nothing
+    let mts s c = mtMap $ mutations now s c
+    let bMutate = C.batch_mutate conn
     case fltr of
         AllColumns     -> liftIO $ C.remove conn key' colPath now consistency
         ColNames []    -> liftIO $ C.remove conn key' colPath now consistency
-        ColNames cs    -> liftIO $ C.batch_mutate conn (mts cs) consistency
-        SupNames sc cs -> liftIO $ C.batch_mutate conn (mts cs) consistency
+        ColNames cs    -> liftIO $ bMutate (mts Nothing cs) consistency
+        SupNames sc cs -> liftIO $ bMutate (mts (Just sc) cs) consistency
         _              -> return ()
     where
         key'    = bs key
         colPath = T.ColumnPath (Just column_family) Nothing Nothing
         mtMap   = M.singleton (bs key) . M.singleton column_family
-        mutations now sup columns = [m now sup columns]
+        mutations now sup cs = [m now sup cs]
         m now sup cs = T.Mutation Nothing (Just $ delete now sup cs)
 
 -- Deletes either the entire SuperColumn or particular (named) columns
@@ -143,6 +146,7 @@ deletion :: Int64 -> Maybe ByteString -> Maybe T.SlicePredicate -> T.Deletion
 deletion  = T.Deletion . Just
 
 -- Creates a SlicePredicate based on an input list of columns.
+slicePredicate :: [ByteString] -> T.SlicePredicate
 slicePredicate cs = T.SlicePredicate (Just cs) Nothing
 
 -- | A constructor to build a Columns filter.
@@ -243,10 +247,10 @@ column_parent cf (SupNames sc _) = T.ColumnParent (Just cf) (Just sc)
 column_parent cf _               = T.ColumnParent (Just cf) Nothing
 
 slice_predicate :: Filter -> T.SlicePredicate
-slice_predicate (ColNames bs)           = T.SlicePredicate (Just bs) Nothing
-slice_predicate (SupNames _ bs)         = T.SlicePredicate (Just bs) Nothing
-slice_predicate (ColRange rs re rr rl)  = T.SlicePredicate Nothing (Just range)
-    where range = T.SliceRange (Just rs) (Just re) (Just rr) (Just rl)
-slice_predicate AllColumns              = T.SlicePredicate Nothing (Just range)
-    where range = T.SliceRange  (Just L.empty) (Just L.empty) (Just False)
+slice_predicate (ColNames ns)           = T.SlicePredicate (Just ns) Nothing
+slice_predicate (SupNames _ ns)         = T.SlicePredicate (Just ns) Nothing
+slice_predicate (ColRange rs re rr rl)  = T.SlicePredicate Nothing (Just range')
+    where range' = T.SliceRange (Just rs) (Just re) (Just rr) (Just rl)
+slice_predicate AllColumns              = T.SlicePredicate Nothing (Just range')
+    where range' = T.SliceRange (Just L.empty) (Just L.empty) (Just False)
                                 (Just 100)
