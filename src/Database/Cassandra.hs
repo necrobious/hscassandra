@@ -28,7 +28,7 @@ module Database.Cassandra
 
 import Control.Monad.Trans      ( liftIO )
 import Data.ByteString.Lazy     ( ByteString )
-import Data.Int                 ( Int32 )
+import Data.Int                 ( Int32, Int64 )
 import Data.Map                 ( Map )
 import Data.Maybe               ( fromJust )
 import Database.Cassandra.Monad ( Cassandra, CassandraConfig, CassandraT
@@ -46,25 +46,47 @@ import qualified Database.Cassandra.Thrift.Cassandra_Types  as T
 import qualified Database.Cassandra.Thrift.Cassandra_Client as C
 import qualified Data.Map as M
 
+-- | Represents either a column, identified by its name and an accompanying
+--   value, or a super column, identified by its name and a list of sub-columns.
 data Column = Column ColumnName ColumnValue
             | Super  ColumnName [Column]
             deriving (Show)
 
--- Build up a column's insert values
+-- | Filter operation based on particular column parameters.
+data Filter =
+       -- | Matches all columns
+      AllColumns
+       -- | Matches columns specified by name.
+    | ColNames [ByteString]
+      -- | Matches a particular super column and its sub-columns (identified by
+      --   name).
+    | SupNames ByteString [ByteString]
+      -- | Cassandra's LIMIT and ORDER BY equivalents. See
+      --   <http://wiki.apache.org/cassandra/API#SliceRange>
+    | ColRange  { rangeStart   :: ByteString
+                , rangeEnd     :: ByteString
+                , rangeReverse :: Bool
+                , rangeLimit   :: Int32
+                }
+
+-- | Build up a column's insert values
 (=:) :: (BS column, BS value) => column -> value -> Column
 (=:) col val = Column (bs col) (bs val)
 
--- Build up a super column's insert values
+-- | Build up a super column's insert values
 (=|) :: (BS supercolumn) => supercolumn -> [Column] -> Column
 (=|) sup  = Super (bs sup)
 
--- insert "Users" "necrobious@gmail.com"
---   [ "fn"      =: "Kirk"
---   , "ln"      =: "Peterson"
---   , "Address" =| [ "street1" =: "2020"
---                  , "state"   =: "Oregon"
---                  ]
---   ]
+-- | Given a particular column family and key, inserts columns consisting of
+--   name-value pairs. E.g.,
+--
+-- > insert "Users" "necrobious@gmail.com"
+-- >   [ "fn"      =: "Kirk"
+-- >   , "ln"      =: "Peterson"
+-- >   , "Address" =| [ "street1" =: "2020"
+-- >                  , "state"   =: "Oregon"
+-- >                  ]
+-- >   ]
 insert :: (BS key) => ColumnFamily -> key -> [Column] -> Cassandra ()
 insert column_family key columns = do
     consistency   <- getConsistencyLevel
@@ -108,45 +130,39 @@ remove column_family key fltr = do
         mutations now sup columns = [m now sup columns]
         m now sup cs = T.Mutation Nothing (Just $ delete now sup cs)
 
--- | Deletes either the entire SuperColumn or particular (named) columns
---   (either standalone or as members of a SuperColumn).
+-- Deletes either the entire SuperColumn or particular (named) columns
+-- (either standalone or as members of a SuperColumn).
+delete :: Int64 -> Maybe ByteString -> [ByteString] -> T.Deletion
 delete now sup@(Just _) [] = deletion now sup Nothing
 delete now sup@(Just _) cs = deletion now sup (Just . slicePredicate $ cs)
 delete now Nothing      [] = deletion now Nothing Nothing
 delete now Nothing      cs = deletion now Nothing (Just . slicePredicate $ cs)
 
--- | Convenience function to create a deletion with a provided time.
-deletion = T.Deletion . Just
+-- Convenience function to create a deletion with a provided time.
+deletion :: Int64 -> Maybe ByteString -> Maybe T.SlicePredicate -> T.Deletion
+deletion  = T.Deletion . Just
 
--- | Creates a SlicePredicate based on an input list of columns.
+-- Creates a SlicePredicate based on an input list of columns.
 slicePredicate cs = T.SlicePredicate (Just cs) Nothing
 
-data Filter =
-      AllColumns
-    | ColNames [ByteString]
-    | SupNames ByteString [ByteString]
-    | ColRange
-        { rangeStart   :: ByteString
-        , rangeEnd     :: ByteString
-        , rangeReverse :: Bool
-        , rangeLimit   :: Int32
-        }
-
--- | a smarter constructor for building a Range filter
-range :: forall column_name. (BS column_name) => column_name -> column_name
-      -> Bool -> Int32 -> Filter
-range start finish = ColRange (bs start) (bs finish)
-
--- | a smarter constructor for building a Columns filter
+-- | A constructor to build a Columns filter.
 columns :: forall column_name. (BS column_name) => [column_name] -> Filter
 columns = ColNames . (map bs)
 
+-- | A constructor to build a Super Columns filter.
 supercolumns :: forall column_name. (BS column_name) => column_name
              -> [column_name] -> Filter
 supercolumns sc cs = SupNames (bs sc) (map bs cs)
 
+-- | A constructor to build a filter for a range.
+range :: forall column_name. (BS column_name) => column_name -> column_name
+      -> Bool -> Int32 -> Filter
+range start finish = ColRange (bs start) (bs finish)
+
 -- | Retrieve all columns (or those allowed by the filter) for a given key
 --   within a given Column Family.
+--
+--   See <http://wiki.apache.org/cassandra/API#get> for more info.
 get :: (BS key) => ColumnFamily -> key -> Filter -> Cassandra [Column]
 get cf key fltr = do
     consistency <- getConsistencyLevel
@@ -157,6 +173,14 @@ get cf key fltr = do
           cp    = column_parent cf fltr
           sp    = slice_predicate fltr
 
+-- | Counts the elements present in a column, identified by key, within
+--   a specified ColumnFamily, matching the filter.
+--
+--   Please note that this method is not @O(1)@ as it must take all columns
+--   from disk to calculate the answer. There is, however, a benefit that they
+--   do not have to be pulled to the client for counting.
+--
+--   See <http://wiki.apache.org/cassandra/API#get_count> for more info.
 get_count :: (BS key) => ColumnFamily -> key -> Filter -> Cassandra Int32
 get_count cf key fltr = do
     consistency <- getConsistencyLevel
@@ -166,6 +190,10 @@ get_count cf key fltr = do
           cp    = column_parent cf fltr
           sp    = slice_predicate fltr
 
+-- | For a specified Column Family, retrieves all columns matching the filter
+--   and identified by one of the supplied keys.
+--
+--   See <http://wiki.apache.org/cassandra/API#multiget_slice> for more info.
 multiget :: (BS key) => ColumnFamily -> [key] -> Filter
          -> Cassandra (Map key [Column])
 multiget cf keys fltr = do
@@ -188,11 +216,13 @@ map2map lookupMap resultsMap = M.foldrWithKey foldOver M.empty resultsMap
                 Just lookupKey -> M.insert lookupKey val accMap
                 Nothing        -> accMap
 
-
+-- | Joins a list of columns or super columns with an existing map of keys and
+--   columns.
 remap :: (BS key) => key -> [T.ColumnOrSuperColumn] -> Map key [Column]
       -> Map key [Column]
 remap key cols acc = M.insert key (foldr rewrap [] cols) acc
 
+-- | Joins a list of columns or super columns with an existing list of columns.
 rewrap :: T.ColumnOrSuperColumn -> [Column] -> [Column]
 rewrap (T.ColumnOrSuperColumn (Just col) Nothing Nothing Nothing) acc =
     let name = fromJust $ T.f_Column_name  col
@@ -205,7 +235,7 @@ rewrap (T.ColumnOrSuperColumn Nothing (Just sc) Nothing Nothing) acc =
 rewrap _ acc  = acc
 
 c2c :: T.Column -> [Column] -> [Column]
-c2c (T.Column  (Just n) (Just v) _ _) acc = (Column n v) : acc
+c2c (T.Column (Just n) (Just v) _ _) acc = (Column n v) : acc
 c2c _ acc = acc
 
 column_parent :: ColumnFamily -> Filter -> T.ColumnParent
