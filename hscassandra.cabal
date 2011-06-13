@@ -1,5 +1,5 @@
 name               : hscassandra
-version            : 0.0.8.2
+version            : 0.0.8
 license            : BSD3
 cabal-version      : >= 1.6
 author             : Kirk Peterson
@@ -35,5 +35,6 @@ library
                      , mtl              >= 2.0
                      , bytestring       == 0.9.1.*
                      , network          >= 2.2 && < 2.4
+                     , text             == 0.11.1.*
                      , Thrift           >= 0.5.0.2
                      , cassandra-thrift >= 0.7.2.1
