@@ -1,5 +1,5 @@
-{-# LANGUAGE  GeneralizedNewtypeDeriving, FunctionalDependencies
-            , MultiParamTypeClasses, OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings,
+             ScopedTypeVariables #-}
 
 module Database.Cassandra.Monad
   ( ProtoHandle
