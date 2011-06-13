@@ -1,29 +1,49 @@
 {-# LANGUAGE  GeneralizedNewtypeDeriving, FunctionalDependencies
-            , MultiParamTypeClasses #-}
+            , MultiParamTypeClasses, OverloadedStrings, ScopedTypeVariables #-}
 
 module Database.Cassandra.Monad
-  ( withCassandra
-  , Cassandra
-  , CassandraT
-  , unCassandra
-  , runCassandraT
+  ( ProtoHandle
+  , CassandraConnection(..)
   , CassandraConfig(..)
-  , initConfig
+  , Failure(..)
+  , Cassandra
+  , CassandraT(..)
+  , runCassandraT
   , getConnection
-  , getKeyspace
-  , setKeyspace
+  , getConfig
   , getConsistencyLevel
   , setConsistencyLevel
+  , setKeyspace
   , getTime
-  , getCassandra
+
+  {- Re-export -}
+  -- Configuration
   , ConsistencyLevel(..)
-  , ProtoHandle
+  , Hostname
+  , Keyspace
+  , Password
+  , Port
+  , Username
+  -- Error Monad
+  , noMsg
+  , strMsg
+  , throwError
+  -- Other
+  , Handle
+  , MonadIO
+  , T.Text
   ) where
 
-import Control.Exception        ( bracket )
+import Prelude hiding (catch)
+
+import Control.Exception        ( Handler(..), bracketOnError, catches )
 import Control.Monad            ( liftM )
-import Control.Monad.State      ( MonadIO, MonadPlus, MonadState, MonadTrans
-                                , StateT, get, liftIO, runStateT, put
+import Control.Monad.Error      ( Error, ErrorT, MonadError, liftIO, noMsg
+                                , runErrorT, strMsg, throwError
+                                )
+import Control.Monad.Reader     ( ReaderT, MonadReader, ask, runReaderT )
+import Control.Monad.State      ( StateT, MonadIO, MonadPlus, MonadState
+                                , get, put, runStateT
                                 )
 import Data.Int                 ( Int64 )
 import Data.List                ( intercalate )
@@ -42,16 +62,23 @@ import Database.Cassandra.Thrift.Cassandra_Types  ( AuthenticationRequest(..)
                                                   , ConsistencyLevel(..)
                                                   )
 
-import qualified Data.Map as M
+import qualified Data.Map  as M
+import qualified Data.Text as T
+import qualified Database.Cassandra.Thrift.Cassandra_Types as CT
 
 -- | A binary protocol where the handle is wraped in a framed mode.
-type ProtoHandle = BinaryProtocol (FramedTransport Handle)
+type ProtoHandle  = BinaryProtocol (FramedTransport Handle)
+
+-- | Carries the connection and handle for the Cassandra connection.
+data CassandraConnection = CassandraConnection
+    { connection    :: (ProtoHandle, ProtoHandle)
+    , handle        :: Handle
+    }
 
 -- | Configuration for the Cassandra environment. Operations will be executed
 --   accordingly based on these values.
 data CassandraConfig = CassandraConfig
-    { cassandraConnection       ::  (ProtoHandle, ProtoHandle)
-    , cassandraKeyspace         ::  String
+    { cassandraKeyspace         ::  Keyspace
     , cassandraConsistencyLevel ::  ConsistencyLevel
     , cassandraHostname         ::  Hostname
     , cassandraPort             ::  Port
@@ -59,87 +86,123 @@ data CassandraConfig = CassandraConfig
     , cassandraPassword         ::  Password
     }
 
-newtype Cassandra a = Cassandra
-    { unCassandra :: CassandraT IO a
-    } deriving (Functor, Monad, MonadIO, MonadPlus, MonadState CassandraConfig)
+-- | Represents the possible errors that the Cassandra library can face, either
+--   during connection or when executing operations.
+data Failure
+    = AuthenticationError (Maybe T.Text)
+    | AuthorizationError  (Maybe T.Text)
+    | InvalidRequest (Maybe T.Text)
+    | NotFound
+    | SchemaDisagreement
+    | TimedOut
+    | Unavailable
+    | OtherFailure T.Text
+    deriving (Eq, Show)
 
+-- | Specializes the CassandraT monad transformer in the IO monad.
+type Cassandra a = CassandraT IO a
+
+-- | A monad transformer serving as an environment in which Cassandra commands
+--   can be executed.
 newtype CassandraT m a = CassandraT
-    { unCassandraT :: StateT CassandraConfig m a
-    } deriving  ( Functor, Monad, MonadIO, MonadPlus, MonadTrans
-                , MonadState CassandraConfig
+    { unCassandraT :: ReaderT CassandraConnection (StateT CassandraConfig
+                        (ErrorT Failure m)) a
+    } deriving  ( Functor, Monad, MonadIO, MonadPlus
+                , MonadError  Failure
+                , MonadReader CassandraConnection
+                , MonadState  CassandraConfig
                 )
 
-runCassandraT :: CassandraT m a -> CassandraConfig -> m (a, CassandraConfig)
-runCassandraT  = runStateT . unCassandraT
+-- | Executes commands within the Cassandra environment when provided with
+--   a 'CassandraConnection' (attainable via 'openConnection'). This will close
+--   the 'CassandraConnection's handle automatically.
+runCassandraT :: (MonadIO m) => CassandraConfig -> CassandraT IO a
+              -> m (Either Failure a)
+runCassandraT cfg mt = liftIO . catch' $ do
+    conn    <- openConnection cfg
+    result  <- runErrorT . (flip runStateT cfg) . (flip runReaderT conn)
+             . unCassandraT $ mt
+    tClose . handle $ conn
+    return $ fst `liftM` result
 
--- | Default configuration for the Cassandra environment. Values can be changed
---   as necessary.
-initConfig :: CassandraConfig
-initConfig  = CassandraConfig
-    { cassandraConnection       = undefined
-    , cassandraKeyspace         = "system"
-    , cassandraConsistencyLevel = ONE
-    , cassandraHostname         = "127.0.0.1"
-    , cassandraPort             = 9160
-    , cassandraUsername         = "default"
-    , cassandraPassword         = ""
-    }
+-- | Catches Cassandra-related exceptions and re-represents them as a 'Failure'
+--   instead.
+catch' :: IO (Either Failure a) -> IO (Either Failure a)
+catch' = flip catches
+    [ Handler $ \(e::CT.AuthenticationException) ->
+        retMsg AuthenticationError $ CT.f_AuthenticationException_why e
+    , Handler $ \(e::CT.AuthorizationException)  ->
+        retMsg AuthorizationError $ CT.f_AuthorizationException_why e
+    , Handler $ \(e::CT.InvalidRequestException) ->
+        retMsg InvalidRequest $ CT.f_InvalidRequestException_why e
+    , Handler $ \(_::CT.SchemaDisagreementException) ->
+        ret SchemaDisagreement
+    , Handler $ \(_::CT.NotFoundException)    -> ret NotFound
+    , Handler $ \(_::CT.TimedOutException)    -> ret TimedOut
+    , Handler $ \(_::CT.UnavailableException) -> ret Unavailable
+    ]
+    where   ret      = return . Left
+            retMsg t = ret . t . liftM T.pack
 
-withCassandra :: CassandraConfig -> Cassandra a -> IO a
-withCassandra config callback = bracket
-    (hOpen (host, port))
-    flushHandle $
-    \handle -> do
-       framed <- openFramedTransport handle
-       let binpro = BinaryProtocol framed
-       let conn   = (binpro, binpro)
-       login        conn (authreq config)
-       set_keyspace conn (cassandraKeyspace config)
-       let cfg    = config { cassandraConnection = conn }
-       fst `liftM` (runCassandraT . unCassandra) callback cfg
+-- | Attempts to open a connection to the Cassandra server based on provided
+--   configuration data. Closing the handle is strictly the job of anyone using
+--   this function (except in the case of an exception, in which case it will
+--   close automatically).
+openConnection :: (MonadIO m) => CassandraConfig -> m CassandraConnection
+openConnection cfg = liftIO $ bracketOnError (hOpen (host, port)) flush $
+    \h -> do
+        framed <- openFramedTransport h
+        let binpro = BinaryProtocol framed
+        let conn   = (binpro, binpro)
+        login conn authreq
+        set_keyspace conn $ cassandraKeyspace cfg
+        return $ CassandraConnection conn h
     where
-        host          = cassandraHostname config
-        port          = PortNumber . fromIntegral . cassandraPort $ config
-        flushHandle h = tFlush h >> tClose h
-        credmap u p   = M.insert "password" p . M.insert "username" u $ M.empty
-        creds cfg     = credmap (cassandraUsername cfg) (cassandraPassword cfg)
-        authreq cfg   = AuthenticationRequest
-            { f_AuthenticationRequest_credentials = Just . creds $ cfg }
+        host    = cassandraHostname cfg
+        port    = PortNumber . fromIntegral . cassandraPort $ cfg
+        flush h = tFlush h >> tClose h
+        creds   = M.insert "username" (cassandraUsername cfg)
+                . M.insert "password" (cassandraPassword cfg)
+                $ M.empty
+        authreq = AuthenticationRequest
+                { f_AuthenticationRequest_credentials = Just creds }
 
--- | Get the current Cassandra connection.
-getConnection :: Cassandra (ProtoHandle, ProtoHandle)
-getConnection  = cassandraConnection `fmap` get
+-- | Retrieves 'CassandraConnection' from the 'CassandraT' monad.
+getConnection :: (MonadIO m) => CassandraT m (ProtoHandle, ProtoHandle)
+getConnection  = connection `liftM` ask
+
+-- | Retrieves 'CassandraConnection' from the 'CassandraT' monad.
+getConfig :: (MonadIO m) => CassandraT m CassandraConfig
+getConfig  = get
 
 -- | Get the 'ConsistencyLevel' being used in Cassandra operations.
-getConsistencyLevel :: Cassandra ConsistencyLevel
-getConsistencyLevel = cassandraConsistencyLevel `fmap` get
+getConsistencyLevel :: (MonadIO m) => CassandraT m ConsistencyLevel
+getConsistencyLevel  = cassandraConsistencyLevel `liftM` get
 
 -- | Set the 'ConsistencyLevel' for Cassandra operations.
 setConsistencyLevel :: ConsistencyLevel -> Cassandra ()
-setConsistencyLevel consistency =  getCassandra >>=
-    \config -> put config { cassandraConsistencyLevel = consistency }
-
--- | Get the keyspace in which Cassandra operations are being executed.
-getKeyspace :: Cassandra Keyspace
-getKeyspace = cassandraKeyspace `fmap` get
+setConsistencyLevel consistency = do
+    config  <- getConfig
+    put config { cassandraConsistencyLevel = consistency }
+    return ()
 
 -- | Set the keyspace in which Cassandra operations are executed.
-setKeyspace :: Keyspace -> Cassandra ()
+setKeyspace :: (MonadIO m) => Keyspace -> CassandraT m ()
 setKeyspace keyspace = do
-  config <- getCassandra
-  conn   <- getConnection
-  liftIO $ set_keyspace conn keyspace
-  put config{cassandraKeyspace=keyspace}
+    conn    <- getConnection
+    config  <- getConfig
+    put config { cassandraKeyspace = keyspace }
+    liftIO $ set_keyspace conn keyspace
 
 -- | Cassandra is very sensitive with respect to the timestamp values. As a
 --   convention, timestamps are always in microseconds.
-getTime :: Cassandra Int64
-getTime = do
-  TOD sec pico <- liftIO getClockTime
-  return . fromInteger $ (sec * 1000000) + (toInteger $ pico `div` 1000000)
+getTime :: (MonadIO m) => m Int64
+getTime  = liftIO getClockTime >>= \(TOD sec pico) ->
+    return . fromInteger $ (sec * 1000000) + (toInteger $ pico `div` 1000000)
 
-getCassandra :: Cassandra CassandraConfig
-getCassandra = get
+instance Error Failure where
+    noMsg   = OtherFailure "Unknown error."
+    strMsg  = OtherFailure . T.pack
 
 instance Show CassandraConfig where
     show c = intercalate ", "

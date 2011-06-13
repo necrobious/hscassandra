@@ -5,25 +5,38 @@ module Database.Cassandra
     , Filter(..)
     , (=:)
     , (=|)
-    , insert
-    , remove
     , get
-    , get_count
+    , getCount
+    , insert
     , multiget
+    , remove
 
-    -- Re-export
-    , withCassandra
-    , CassandraConfig
-    , initConfig
-    , getConnection
-    , getKeyspace
-    , setKeyspace
-    , getConsistencyLevel
-    , setConsistencyLevel
-    , getTime
-    , getCassandra
+    {- Re-Export -}
+    -- Cassandra Monad
     , Cassandra
     , CassandraT
+    , CassandraConfig(..)
+    , Failure(..)
+    , runCassandraT
+    , noMsg
+    , strMsg
+    , throwError
+    -- Configuration
+    , ConsistencyLevel(..)
+    , Hostname
+    , Keyspace
+    , Password
+    , Port
+    , Username
+    -- Cassandra Types
+    , ColumnFamily
+    , ColumnName
+    , ColumnValue
+    , Key
+    , SuperColumnName
+    -- Other
+    , M.Map
+    , Text
     ) where
 
 import Control.Monad.Trans      ( liftIO )
@@ -31,11 +44,12 @@ import Data.ByteString.Lazy     ( ByteString )
 import Data.Int                 ( Int32, Int64 )
 import Data.Map                 ( Map )
 import Data.Maybe               ( fromJust )
-import Database.Cassandra.Monad ( Cassandra, CassandraConfig, CassandraT
-                                , getKeyspace, getCassandra, getConnection
-                                , getConsistencyLevel, getTime, initConfig
-                                , setKeyspace, setConsistencyLevel
-                                , withCassandra
+import Database.Cassandra.Monad ( Cassandra, CassandraT, CassandraConfig(..)
+                                , ConsistencyLevel(..) , Failure(..), Hostname
+                                , Keyspace, MonadIO, Password, Port, Text
+                                , Username, getConnection , getConsistencyLevel
+                                , getTime, noMsg, runCassandraT, strMsg
+                                , throwError
                                 )
 import Database.Cassandra.Types ( ColumnFamily, ColumnName
                                 , ColumnValue, Key, SuperColumnName
@@ -77,6 +91,35 @@ data Filter =
 (=|) :: SuperColumnName -> [Column] -> Column
 (=|) sup = Super sup
 
+-- | Retrieve all columns (or those allowed by the filter) for a given key
+--   within a given Column Family.
+--
+--   See <http://wiki.apache.org/cassandra/API#get> for more info.
+get :: (MonadIO m) => ColumnFamily -> Key -> Filter -> CassandraT m [Column]
+get cf key fltr = do
+    consistency <- getConsistencyLevel
+    conn    <- getConnection
+    results <- liftIO $ C.get_slice conn key cp sp consistency
+    return   $ foldr rewrap [] results
+    where cp    = column_parent cf fltr
+          sp    = slice_predicate fltr
+
+-- | Counts the elements present in a column, identified by key, within
+--   a specified ColumnFamily, matching the filter.
+--
+--   Please note that this method is not @O(1)@ as it must take all columns
+--   from disk to calculate the answer. There is, however, a benefit that they
+--   do not have to be pulled to the client for counting.
+--
+--   See <http://wiki.apache.org/cassandra/API#get_count> for more info.
+getCount :: (MonadIO m) => ColumnFamily -> Key -> Filter -> CassandraT m Int32
+getCount cf key fltr = do
+    consistency <- getConsistencyLevel
+    conn        <- getConnection
+    liftIO $ C.get_count conn key cp sp consistency
+    where cp    = column_parent cf fltr
+          sp    = slice_predicate fltr
+
 -- | Given a particular column family and key, inserts columns consisting of
 --   name-value pairs. E.g.,
 --
@@ -87,7 +130,7 @@ data Filter =
 -- >                  , "state"   =: "Oregon"
 -- >                  ]
 -- >   ]
-insert :: ColumnFamily -> Key -> [Column] -> Cassandra ()
+insert :: (MonadIO m) => ColumnFamily -> Key -> [Column] -> CassandraT m ()
 insert column_family key cols = do
     consistency   <- getConsistencyLevel
     conn          <- getConnection
@@ -106,12 +149,28 @@ insert column_family key cols = do
         f now (Super s cs)  = superCol $ T.SuperColumn (Just s)
                                          (Just $ map (m now) cs)
 
+-- | For a specified Column Family, retrieves all columns matching the filter
+--   and identified by one of the supplied keys.
+--
+--   See <http://wiki.apache.org/cassandra/API#multiget_slice> for more info.
+multiget :: (MonadIO m) => ColumnFamily -> [Key] -> Filter
+         -> CassandraT m (Map Key [Column])
+multiget cf keys fltr = do
+    let byBs     = keys2map keys
+    consistency <- getConsistencyLevel
+    conn        <- getConnection
+    let mKeys    = M.keys byBs
+    results     <- liftIO $ C.multiget_slice conn mKeys cp sp consistency
+    return . map2map byBs $ M.foldrWithKey remap M.empty results
+    where cp = column_parent cf fltr
+          sp = slice_predicate fltr
+
 -- | Given a particular column family and key, removes either a SuperColumn or
 --   particular (named) columns (belonging to either a column family or super
 --   column) based on the filter. E.g.,
 --
 -- > remove "Users" "necrobious@gmail.com" (columns ["fn", "address" , "ln"])
-remove :: ColumnFamily -> Key -> Filter  -> Cassandra ()
+remove :: (MonadIO m) => ColumnFamily -> Key -> Filter  -> CassandraT m ()
 remove column_family key fltr = do
     consistency <- getConsistencyLevel
     conn        <- getConnection
@@ -145,50 +204,6 @@ deletion  = T.Deletion . Just
 -- Creates a SlicePredicate based on an input list of columns.
 slicePredicate :: [ColumnName] -> T.SlicePredicate
 slicePredicate cs = T.SlicePredicate (Just cs) Nothing
-
--- | Retrieve all columns (or those allowed by the filter) for a given key
---   within a given Column Family.
---
---   See <http://wiki.apache.org/cassandra/API#get> for more info.
-get :: ColumnFamily -> Key -> Filter -> Cassandra [Column]
-get cf key fltr = do
-    consistency <- getConsistencyLevel
-    conn    <- getConnection
-    results <- liftIO $ C.get_slice conn key cp sp consistency
-    return   $ foldr rewrap [] results
-    where cp    = column_parent cf fltr
-          sp    = slice_predicate fltr
-
--- | Counts the elements present in a column, identified by key, within
---   a specified ColumnFamily, matching the filter.
---
---   Please note that this method is not @O(1)@ as it must take all columns
---   from disk to calculate the answer. There is, however, a benefit that they
---   do not have to be pulled to the client for counting.
---
---   See <http://wiki.apache.org/cassandra/API#get_count> for more info.
-get_count :: ColumnFamily -> Key -> Filter -> Cassandra Int32
-get_count cf key fltr = do
-    consistency <- getConsistencyLevel
-    conn        <- getConnection
-    liftIO $ C.get_count conn key cp sp consistency
-    where cp    = column_parent cf fltr
-          sp    = slice_predicate fltr
-
--- | For a specified Column Family, retrieves all columns matching the filter
---   and identified by one of the supplied keys.
---
---   See <http://wiki.apache.org/cassandra/API#multiget_slice> for more info.
-multiget :: ColumnFamily -> [Key] -> Filter -> Cassandra (Map Key [Column])
-multiget cf keys fltr = do
-    let byBs     = keys2map keys
-    consistency <- getConsistencyLevel
-    conn        <- getConnection
-    let mKeys    = M.keys byBs
-    results     <- liftIO $ C.multiget_slice conn mKeys cp sp consistency
-    return . map2map byBs $ M.foldrWithKey remap M.empty results
-    where cp = column_parent cf fltr
-          sp = slice_predicate fltr
 
 -- Turns a list of keys into a map.
 keys2map :: [Key] -> Map ByteString Key
