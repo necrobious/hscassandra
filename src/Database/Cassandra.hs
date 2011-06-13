@@ -1,7 +1,8 @@
 {-# LANGUAGE RankNTypes #-}
 
 module Database.Cassandra
-    ( Column(..)
+    ( -- $doc
+      Column(..)
     , Filter(..)
     , (=:)
     , (=|)
@@ -124,12 +125,12 @@ getCount cf key fltr = do
 --   name-value pairs. E.g.,
 --
 -- > insert "Users" "necrobious@gmail.com"
--- >   [ "fn"      =: "Kirk"
--- >   , "ln"      =: "Peterson"
--- >   , "Address" =| [ "street1" =: "2020"
--- >                  , "state"   =: "Oregon"
--- >                  ]
--- >   ]
+-- >     [ "fn"      =: "Kirk"
+-- >     , "ln"      =: "Peterson"
+-- >     , "Address" =| [ "street1" =: "2020"
+-- >                    , "state"   =: "Oregon"
+-- >                    ]
+-- >     ]
 insert :: (MonadIO m) => ColumnFamily -> Key -> [Column] -> CassandraT m ()
 insert column_family key cols = do
     consistency   <- getConsistencyLevel
@@ -169,7 +170,7 @@ multiget cf keys fltr = do
 --   particular (named) columns (belonging to either a column family or super
 --   column) based on the filter. E.g.,
 --
--- > remove "Users" "necrobious@gmail.com" (columns ["fn", "address" , "ln"])
+-- > remove "Users" "necrobious@gmail.com" (ColNames ["fn", "address" , "ln"])
 remove :: (MonadIO m) => ColumnFamily -> Key -> Filter  -> CassandraT m ()
 remove column_family key fltr = do
     consistency <- getConsistencyLevel
@@ -259,3 +260,53 @@ slice_predicate (ColRange rs re rr rl)  = T.SlicePredicate Nothing (Just range)
 slice_predicate AllColumns              = T.SlicePredicate Nothing (Just range)
     where range = T.SliceRange (Just L.empty) (Just L.empty) (Just False)
                                (Just 100)
+
+-- $doc
+--
+-- This module is a wrapper around the cassandra-thrift
+-- (<http://hackage.haskell.org/package/cassandra-thrift>) package, which
+-- implements the Apache Cassandra API via Thrift.
+--
+-- Here, operations are done through the 'CassandraT' monad, which encapsulates
+-- the handling of the configuration while also catching common errors, making
+-- Cassandra easy to use from a client's perspective. Some basic usage follows.
+--
+-- The below examples assume the @NoMonomorphismRestriction@ and
+-- @OverloadedStrings@ LANGUAGE pragmas.
+--
+-- First, we must define our connection to Cassandra by using 'CassandraConfig'.
+--
+-- > config = CassandraConfig   { cassandraKeyspace          = "MyKeyspace"
+-- >                             , cassandraConsistencyLevel = ONE
+-- >                             , cassandraHostname         = "127.0.0.1"
+-- >                             , cassandraPort             = 9160
+-- >                             , cassandraUsername         = ""
+-- >                             , cassandraPassword         = ""
+-- >                             }
+--
+-- We can then run the Cassandra monad and begin executing our operations:
+--
+-- > works :: MonadIO m => m (Either Failure [Column])
+-- > works  = runCassandraT config $ do
+-- >     insert "Users" "michael" [ "name"      =: "Michael Schade"
+-- >                              , "email"     =: "hackage@spearheaddev.com"
+-- >                              , "website"   =: "http://spearheaddev.com/"
+-- >                              ]
+-- >     get "Users" "michael" AllColumns
+--
+-- This would return:
+--
+-- > Right [Column (Chunk "email" Empty) (Chunk "hackage@mschade.me" Empty), ...
+--
+-- As mentioned, error handling is incorporated into the 'CassandraT' monad. If
+-- we tried code similar to above, but using the nonexistent (and so
+-- conveniently named) `NonExistentCF` column family, we helpfully be returned
+-- a @m (Left Failure)@. For example,
+--
+-- > fails :: MonadIO m => m (Either Failure [Column])
+-- > fails  = runCassandraT config $ do
+-- >    get "NonExistentCF" "michael" AllColumns
+--
+-- returns
+--
+-- > Left (InvalidRequest (Just "unconfigured columnfamily NonExistentCF"))
