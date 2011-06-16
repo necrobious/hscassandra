@@ -1,23 +1,17 @@
-#### Connecting
-Connecting to cassandra is done with the withCassandra function, which takes a CassandraConfig instance, and a callback function.
+# Licensing
 
-    withCassandra initConfig{cassandraKeyspace="MyApplication"} (do
-        getTime
-        )
+This package is licensed under
+[BSD3](http://www.opensource.org/licenses/bsd-license.php).
 
+# Installation
 
-#### Inserting 
-Inserts are done via the _insert_ function, taking A Column Family string name, a Key, and a a list of columns to add.
+The best way to install is to grab the most recent stable version from
+[Hackage](http://hackage.haskell.org/packgage/hscassandra). This can be done by
+using `cabal` from the command line:
 
-    insert "Users" "kirk@glyphsoftware.com" 
-        [ "fn" =: "Kirk"
-        , "ln" =: "Peterson"
-        , "address" =| ["street" =: "2020 NE Going", "city"=:"Portland", "state" =: "OR"]
-        , "gender" =: "M"
-        ]
+    cabal install hscassandra
 
-#### Retrieving
-you can then pull the data back out via the _get_ function.
+# Usage
 
-    get "Users" "kirk@glyphsoftware.com" AllColumns
-
+Please see the [Hackage documentation](http://hackage.haskell.org/packages/archive/hscassandra/latest/doc/html/Database-Cassandra.html)
+for usage information.
