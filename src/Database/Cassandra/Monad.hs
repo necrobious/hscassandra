@@ -116,31 +116,32 @@ newtype CassandraT m a = CassandraT
 -- | Executes commands within the Cassandra environment when provided with
 --   a 'CassandraConnection' (attainable via 'openConnection'). This will close
 --   the 'CassandraConnection's handle automatically.
-runCassandraT :: (MonadIO m) => CassandraConfig -> CassandraT IO a
+runCassandraT :: MonadIO m => CassandraConfig -> CassandraT m a
               -> m (Either Failure a)
-runCassandraT cfg mt = liftIO . catch' $ do
+runCassandraT cfg mt = catch' $ do
     conn    <- openConnection cfg
     result  <- runErrorT . (flip runStateT cfg) . (flip runReaderT conn)
              . unCassandraT $ mt
-    tClose . handle $ conn
+    liftIO . tClose . handle $ conn
     return $ fst `liftM` result
 
 -- | Catches Cassandra-related exceptions and re-represents them as a 'Failure'
 --   instead.
-catch' :: IO (Either Failure a) -> IO (Either Failure a)
-catch' = flip catches
-    [ Handler $ \(e::CT.AuthenticationException) ->
-        retMsg AuthenticationError $ CT.f_AuthenticationException_why e
-    , Handler $ \(e::CT.AuthorizationException)  ->
-        retMsg AuthorizationError $ CT.f_AuthorizationException_why e
-    , Handler $ \(e::CT.InvalidRequestException) ->
-        retMsg InvalidRequest $ CT.f_InvalidRequestException_why e
-    , Handler $ \(_::CT.SchemaDisagreementException) ->
-        ret SchemaDisagreement
-    , Handler $ \(_::CT.NotFoundException)    -> ret NotFound
-    , Handler $ \(_::CT.TimedOutException)    -> ret TimedOut
-    , Handler $ \(_::CT.UnavailableException) -> ret Unavailable
-    ]
+catch' :: MonadIO m => m (Either Failure a) -> m (Either Failure a)
+catch' input = input >>= \ip ->
+    liftIO $ catches (return ip)
+        [ Handler $ \(e::CT.AuthenticationException) ->
+            retMsg AuthenticationError $ CT.f_AuthenticationException_why e
+        , Handler $ \(e::CT.AuthorizationException)  ->
+            retMsg AuthorizationError $ CT.f_AuthorizationException_why e
+        , Handler $ \(e::CT.InvalidRequestException) ->
+            retMsg InvalidRequest $ CT.f_InvalidRequestException_why e
+        , Handler $ \(_::CT.SchemaDisagreementException) ->
+            ret SchemaDisagreement
+        , Handler $ \(_::CT.NotFoundException)    -> ret NotFound
+        , Handler $ \(_::CT.TimedOutException)    -> ret TimedOut
+        , Handler $ \(_::CT.UnavailableException) -> ret Unavailable
+        ]
     where   ret      = return . Left
             retMsg t = ret . t . liftM T.pack
 
