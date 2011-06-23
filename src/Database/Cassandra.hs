@@ -6,6 +6,7 @@ module Database.Cassandra
     , Filter(..)
     , (=:)
     , (=|)
+    , (=$)
     , get
     , getCount
     , insert
@@ -85,13 +86,20 @@ data Filter =
                 , rangeLimit   :: Int32
                 }
 
--- | Build up a column's insert values
-(=:) :: ColumnName -> (Maybe TTLTime, ColumnValue) -> Column
-(=:) col (ttl, val) = Column col val ttl
+-- | Build up a column's insert values. This implies no TTL. If you wish to
+--   specify TTL, please see '(=$)'.
+(=:) :: ColumnName -> ColumnValue -> Column
+(=:) col val = Column col val Nothing
 
 -- | Build up a super column's insert values
 (=|) :: SuperColumnName -> [Column] -> Column
 (=|) sup = Super sup
+
+-- | Builds up a column's insert values, requiring the user to also provide
+--   a TTL as the first value of a tuple. The second value of this tuple is the
+--   column's value.
+(=$) :: ColumnName -> (TTLTime, ColumnValue) -> Column
+(=$) col (ttl, val) = Column col val (Just ttl)
 
 -- | Retrieve all columns (or those allowed by the filter) for a given key
 --   within a given Column Family.
