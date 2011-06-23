@@ -1,31 +1,40 @@
-name               : hscassandra 
-version            : 0.0.7
-license            : BSD3 
+name               : hscassandra
+version            : 0.0.8
+license            : BSD3
 cabal-version      : >= 1.6
-author             : Kirk Peterson 
+author             : Kirk Peterson
 maintainer         : kirk@glyphsoftware.com,
                      necrobious@gmail.com
 homepage           : https://github.com/necrobious/hscassandra
 stability          : alpha
-synopsis           : cassandra database interface 
-description:
-  A simple abstration over the Cassandra Thrift bindings designed to make working with Cassandra's thrift API easier, without removing the ability to use it directly.
-  A Cassandra monad is presented for mannaging the connection to the Cassandra server, and the calculation of cassandra timestams (in microseconds).
-category           : Database 
+synopsis           : cassandra database interface
+description        : A simple abstration over the Cassandra Thrift
+                     bindings designed to make working with Cassandra's
+                     thrift API easier, without removing the ability to
+                     use it directly.
+
+                     A Cassandra monad is presented for mannaging the
+                     connection to the Cassandra server, and the calculation of
+                     cassandra timestams (in microseconds).
+category           : Database
 build-type         : Simple
+
 source-repository head
   type             : git
   location         : git://github.com/necrobious/hscassandra.git
+
 library
-    hs-source-dirs : src
-    exposed-modules: Database.Cassandra,
-                     Database.Cassandra.Monad,
-                     Database.Cassandra.Types
-    build-depends  : base >= 4.2.0.0 && < 4.9, 
-                     containers,
-                     old-time,
-                     mtl >= 2.0,
-                     bytestring,
-                     network,
-                     Thrift >= 0.5.0.2,
-                     cassandra-thrift >= 0.7.2.1
+    hs-source-dirs   : src
+    ghc-options      : -Wall -fwarn-tabs
+    exposed-modules  : Database.Cassandra
+                     , Database.Cassandra.Monad
+                     , Database.Cassandra.Types
+    build-depends    : base             >= 4.2.0.0 && < 4.9
+                     , containers        < 0.5
+                     , old-time         == 1.0.0.*
+                     , mtl              >= 2.0
+                     , bytestring       == 0.9.1.*
+                     , network          >= 2.2 && < 2.4
+                     , text             == 0.11.1.*
+                     , Thrift           >= 0.5.0.2
+                     , cassandra-thrift >= 0.7.2.1
