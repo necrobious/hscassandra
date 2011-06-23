@@ -134,10 +134,10 @@ getCount cf key fltr = do
 --   name-value pairs. E.g.,
 --
 -- > insert "Users" "necrobious@gmail.com"
--- >     [ "fn"      =: (Nothing, "Kirk")
--- >     , "ln"      =: (Just 10, "Peterson")
--- >     , "Address" =| [ "street1" =: (Nothing, "2020")
--- >                    , "state"   =: (Nothing, "Oregon")
+-- >     [ "fn"      =: "Kirk"
+-- >     , "ln"      =$ (10, "Peterson")
+-- >     , "Address" =| [ "street1" =: "2020"
+-- >                    , "state"   =: "Oregon"
 -- >                    ]
 -- >     ]
 --
@@ -302,7 +302,7 @@ slice_predicate AllColumns              = T.SlicePredicate Nothing (Just range)
 -- > works :: MonadIO m => m (Either Failure [Column])
 -- > works  = runCassandraT config $ do
 -- >     insert "Users" "michael" [ "name"      =: "Michael Schade"
--- >                              , "email"     =: "hackage@spearheaddev.com"
+-- >                              , "email"     =: "hackage@mschade.me"
 -- >                              , "website"   =: "http://spearheaddev.com/"
 -- >                              ]
 -- >     get "Users" "michael" AllColumns
