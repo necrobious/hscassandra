@@ -37,6 +37,7 @@ module Database.Cassandra
     , SuperColumnName
     -- Other
     , M.Map
+    , MonadIO
     , Text
     ) where
 
@@ -53,7 +54,7 @@ import Database.Cassandra.Monad ( Cassandra, CassandraT, CassandraConfig(..)
                                 , throwError
                                 )
 import Database.Cassandra.Types ( ColumnFamily, ColumnName
-                                , ColumnValue, Key, SuperColumnName
+                                , ColumnValue, TTLTime, Key, SuperColumnName
                                 )
 
 import qualified Data.ByteString.Lazy.Char8 as L
@@ -63,7 +64,7 @@ import qualified Data.Map as M
 
 -- | Represents either a column, identified by its name and an accompanying
 --   value, or a super column, identified by its name and a list of sub-columns.
-data Column = Column ColumnName ColumnValue
+data Column = Column ColumnName ColumnValue (Maybe TTLTime)
             | Super  ColumnName [Column]
             deriving (Show)
 
@@ -85,8 +86,8 @@ data Filter =
                 }
 
 -- | Build up a column's insert values
-(=:) :: ColumnName -> ColumnValue -> Column
-(=:) col val = Column col val
+(=:) :: ColumnName -> (Maybe TTLTime, ColumnValue) -> Column
+(=:) col (ttl, val) = Column col val ttl
 
 -- | Build up a super column's insert values
 (=|) :: SuperColumnName -> [Column] -> Column
@@ -125,12 +126,15 @@ getCount cf key fltr = do
 --   name-value pairs. E.g.,
 --
 -- > insert "Users" "necrobious@gmail.com"
--- >     [ "fn"      =: "Kirk"
--- >     , "ln"      =: "Peterson"
--- >     , "Address" =| [ "street1" =: "2020"
--- >                    , "state"   =: "Oregon"
+-- >     [ "fn"      =: (Nothing, "Kirk")
+-- >     , "ln"      =: (Just 10, "Peterson")
+-- >     , "Address" =| [ "street1" =: (Nothing, "2020")
+-- >                    , "state"   =: (Nothing, "Oregon")
 -- >                    ]
 -- >     ]
+--
+--   Note that, in the above example, the \"ln\" field illustrates setting
+--   a TTL on a column. The last name will expire 10 seconds after insertion.
 insert :: (MonadIO m) => ColumnFamily -> Key -> [Column] -> CassandraT m ()
 insert column_family key cols = do
     consistency   <- getConsistencyLevel
@@ -143,12 +147,12 @@ insert column_family key cols = do
         colOrSuperCol c sc  = T.ColumnOrSuperColumn c sc Nothing Nothing
         column c            = colOrSuperCol (Just c) Nothing
         superCol sc         = colOrSuperCol Nothing (Just sc)
-        col c v now         = T.Column (Just c) (Just v) (Just now) Nothing
-        m now (Column c v)  = col c v now
-        q now c             = T.Mutation (Just $ f now c) Nothing
-        f now (Column c v)  = column $ col c v now
+        col c v now ttl     = T.Column (Just c) (Just v) (Just now) ttl
         f now (Super s cs)  = superCol $ T.SuperColumn (Just s)
                                          (Just $ map (m now) cs)
+        f now (Column c v ttl)  = column $ col c v now ttl
+        m now (Column c v ttl)  = col c v now ttl
+        q now c                 = T.Mutation (Just $ f now c) Nothing
 
 -- | For a specified Column Family, retrieves all columns matching the filter
 --   and identified by one of the supplied keys.
@@ -229,7 +233,8 @@ rewrap :: T.ColumnOrSuperColumn -> [Column] -> [Column]
 rewrap (T.ColumnOrSuperColumn (Just col) Nothing Nothing Nothing) acc =
     let name = fromJust $ T.f_Column_name  col
         val  = fromJust $ T.f_Column_value col
-    in (Column name val) : acc
+        ttl  = T.f_Column_ttl col
+    in (Column name val ttl) : acc
 rewrap (T.ColumnOrSuperColumn Nothing (Just sc) Nothing Nothing) acc =
     let name = fromJust $ T.f_SuperColumn_name sc
         cols = fromJust $ T.f_SuperColumn_columns sc
@@ -239,7 +244,7 @@ rewrap _ acc  = acc
 -- Joins a Cassandra-Thrift 'T.Column' with a list of Columns, turning it
 -- into a 'Column' in the process.
 c2c :: T.Column -> [Column] -> [Column]
-c2c (T.Column (Just n) (Just v) _ _) acc = (Column n v) : acc
+c2c (T.Column (Just n) (Just v) _ ttl) acc = (Column n v ttl) : acc
 c2c _ acc = acc
 
 -- Uses a specified 'ColumnFamily' and 'Filter' to produce a 'T.ColumnParent',
